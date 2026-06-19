@@ -25,6 +25,7 @@ namespace Globals
 	extern inline bool bFillVendingMachines = true;
 	extern inline bool bPrivateIPsAreOperator = true;
 	extern inline int AmountOfListens = 0; // TODO: Switch to this for LastNum
+	extern inline int BasePort = 7779; // Starting listen port; change per instance to avoid conflicts
 	extern inline bool bDeveloperMode = false;
 }
 
