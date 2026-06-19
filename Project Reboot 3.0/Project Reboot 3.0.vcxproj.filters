@@ -846,6 +846,9 @@
     <ClInclude Include="UnrealTypeTraits.h">
       <Filter>Engine\Source\Runtime\Core\Public\Templates</Filter>
     </ClInclude>
+    <ClInclude Include="updater.h">
+      <Filter>Reboot\Public</Filter>
+    </ClInclude>
     <ClInclude Include="FortLootLevel.h">
       <Filter>FortniteGame\Source\FortniteGame\Public\Items</Filter>
     </ClInclude>
