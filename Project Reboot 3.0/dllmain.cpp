@@ -48,6 +48,7 @@
 #include "FortAIEncounterInfo.h"
 #include "FortServerBotManagerAthena.h"
 #include "botnames.h"
+#include "updater.h"
 
 /*
 
@@ -925,7 +926,9 @@ DWORD WINAPI Main(LPVOID)
     LOG_INFO(LogInit, "Initializing Project Reboot!");
     LOG_INFO(LogDev, "Built on {} {}", __DATE__, __TIME__);
 
-#endif 
+    CreateThread(0, 0, Updater::UpdaterThread, 0, 0, 0);
+
+#endif
 
     Addresses::SetupVersion();
 

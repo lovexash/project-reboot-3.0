@@ -501,6 +501,7 @@
     <ClInclude Include="UnrealString.h" />
     <ClInclude Include="UnrealTemplate.h" />
     <ClInclude Include="UnrealTypeTraits.h" />
+    <ClInclude Include="updater.h" />
     <ClInclude Include="UObjectArray.h" />
     <ClInclude Include="UObjectGlobals.h" />
     <ClInclude Include="Vector.h" />
