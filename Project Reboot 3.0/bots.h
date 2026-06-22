@@ -5,6 +5,11 @@
 #include "FortAthenaAIBotController.h"
 #include "BuildingContainer.h"
 #include "botnames.h"
+#include "globals.h"
+#include "GameModeBase.h"
+#include "GameplayStatics.h"
+#include "FortWeaponItemDefinition.h"
+#include "BotAI.h"
 
 class BotPOI
 {
@@ -18,6 +23,14 @@ public:
 	int NumChestsSearched;
 	int NumAmmoBoxesSearched;
 	int NumPlayersEncountered;
+};
+
+// Where a match-filling bot is in its life cycle.
+enum class EBotDropState : uint8_t
+{
+	Lobby,        // spawned, waiting in the lobby / warmup for the bus to fly
+	WaitingDrop,  // aircraft phase started, counting down to its drop time
+	Dropped       // dropped into the map, combat AI has taken over
 };
 
 class PlayerBot
@@ -34,6 +47,60 @@ public:
 	int TotalPlayersEncountered;
 	std::vector<BotPOI> POIsTraveled;
 	float NextJumpTime = 1.0f;
+
+	// Lobby -> bus -> drop life cycle (see Bots::Tick).
+	EBotDropState DropState = EBotDropState::Lobby;
+	float DropTime = 0.f;        // world time at which this bot leaves the bus
+	float InvulnerableUntil = 0.f; // world time until which fall damage is ignored
+	UFortWeaponItemDefinition* CombatWeapon = nullptr; // gun handed out so the bot can fight
+	FGuid CombatWeaponGuid;
+
+	// Finds a sensible automatic weapon to arm bots with. Version agnostic:
+	// it scans the loaded ranged weapon definitions and prefers a standard
+	// assault rifle, falling back to whatever ranged weapon exists.
+	static UFortWeaponItemDefinition* FindBotWeapon()
+	{
+		static UFortWeaponItemDefinition* Cached = nullptr;
+
+		if (Cached)
+			return Cached;
+
+		auto RangedClass = FindObject<UClass>(L"/Script/FortniteGame.FortWeaponRangedItemDefinition");
+
+		if (!RangedClass)
+			return nullptr;
+
+		auto AllRanged = GetAllObjectsOfClass(RangedClass);
+		UFortWeaponItemDefinition* Fallback = nullptr;
+
+		for (int i = 0; i < AllRanged.size(); ++i)
+		{
+			auto Def = (UFortWeaponItemDefinition*)AllRanged.at(i);
+
+			if (!Def)
+				continue;
+
+			auto Name = Def->GetName();
+
+			// Skip ammo / default / blueprint base objects.
+			if (Name.starts_with("Default__"))
+				continue;
+
+			if (!Fallback)
+				Fallback = Def;
+
+			if (Name.find("Assault_Auto") != std::string::npos && Name.find("Athena") != std::string::npos)
+			{
+				Cached = Def;
+				break;
+			}
+		}
+
+		if (!Cached)
+			Cached = Fallback;
+
+		return Cached;
+	}
 
 	void OnPlayerEncountered()
 	{
@@ -154,6 +221,21 @@ public:
 						if (PickaxeInstance)
 						{
 							FortPlayerController->ServerExecuteInventoryItemHook(FortPlayerController, PickaxeInstance->GetItemEntry()->GetItemGuid());
+						}
+					}
+
+					// Hand the bot a gun so it can actually fight once it lands.
+					if (auto Weapon = FindBotWeapon())
+					{
+						auto Result = (*Inventory)->AddItem(Weapon, nullptr, 1, 999);
+
+						if (Result.first.size() > 0 && Result.first.at(0))
+						{
+							CombatWeapon = Weapon;
+							CombatWeaponGuid = Result.first.at(0)->GetItemEntry()->GetItemGuid();
+
+							if (Pawn)
+								Pawn->EquipWeaponDefinition(Weapon, CombatWeaponGuid);
 						}
 					}
 
@@ -347,12 +429,28 @@ namespace Bots
 		return playerBot.Controller;
 	}
 
+	// Spawns the lobby bots. They are created as real player-controller bots
+	// at the warmup spawn island (the "lobby"); Bots::Tick then drops them
+	// into the map once the bus is flying. Called from
+	// AFortGameModeAthena::Athena_ReadyToStartMatchHook.
 	static void SpawnBotsAtPlayerStarts(int AmountOfBots)
 	{
-		return;
+		if (!Globals::bEnableBots || AmountOfBots <= 0)
+			return;
 
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
+
+		if (!GameState || !GameMode)
+			return;
+
+		PlayerBot::InitializeBotClasses();
+
+		if (!PlayerBot::IsReadyToSpawnBot())
+		{
+			LOG_ERROR(LogBots, "Bot classes not ready, cannot spawn bots!");
+			return;
+		}
 
 		static auto FortPlayerStartCreativeClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerStartCreative");
 		static auto FortPlayerStartWarmupClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerStartWarmup");
@@ -360,99 +458,142 @@ namespace Bots
 
 		int ActorsNum = PlayerStarts.Num();
 
-		// Actors.Free();
-
 		if (ActorsNum == 0)
 		{
-			// LOG_INFO(LogDev, "No Actors!");
+			LOG_WARN(LogBots, "No player starts to spawn bots at!");
+			PlayerStarts.Free();
 			return;
 		}
 
-		// Find playerstart (scuffed)
-
 		for (int i = 0; i < AmountOfBots; ++i)
 		{
-			AActor* PlayerStart = PlayerStarts.at(std::rand() % (PlayerStarts.size() - 1));
+			AActor* PlayerStart = PlayerStarts.at(std::rand() % ActorsNum);
 
 			if (!PlayerStart)
-			{
-				return;
-			}
+				continue;
 
-			auto NewBot = SpawnBot(PlayerStart->GetTransform(), PlayerStart);
-			NewBot->SetCanBeDamaged(Fortnite_Version < 7); // idk lol for spawn island
+			SpawnBot(PlayerStart->GetTransform(), PlayerStart);
 		}
 
-		return;
+		PlayerStarts.Free();
+
+		LOG_INFO(LogBots, "Spawned {} lobby bots.", (int)AllPlayerBotsToTick.size());
+	}
+
+	// Drops a single bot out of the bus and into the map. The bot is restarted
+	// high above a random in-map player start so it falls in like a real
+	// player, is made briefly invulnerable so the landing doesn't kill it, and
+	// is then handed to the combat AI.
+	static void Drop(AFortGameModeAthena* GameMode, PlayerBot& Bot, float Now)
+	{
+		static auto FortPlayerStartClass = FindObject<UClass>(L"/Script/FortniteGame.FortPlayerStart");
+		auto Starts = UGameplayStatics::GetAllActorsOfClass(GetWorld(), FortPlayerStartClass);
+
+		FTransform DropTransform{};
+		DropTransform.Scale3D = FVector(1, 1, 1);
+		DropTransform.Rotation = FQuat(0, 0, 0, 1); // identity, overwritten below if we find a start
+
+		if (Starts.Num() > 0)
+		{
+			auto Start = Starts.at(std::rand() % Starts.Num());
+
+			if (Start)
+				DropTransform = Start->GetTransform();
+		}
+		else if (Bot.Controller->GetPawn())
+		{
+			DropTransform = Bot.Controller->GetPawn()->GetTransform();
+		}
+
+		Starts.Free();
+
+		DropTransform.Translation.Z += Globals::BotDropHeight;
+
+		GameMode->RestartPlayerAtTransform(Bot.Controller, DropTransform);
+
+		Bot.Pawn = Cast<AFortPlayerPawnAthena>(Bot.Controller->GetPawn());
+
+		if (Bot.Pawn)
+		{
+			Bot.Pawn->SetCanBeDamaged(false); // survive the fall
+			Bot.InvulnerableUntil = Now + Globals::BotDropInvulnerableTime;
+
+			// Re-equip the gun on the freshly spawned pawn.
+			if (Bot.CombatWeapon)
+				Bot.Pawn->EquipWeaponDefinition(Bot.CombatWeapon, Bot.CombatWeaponGuid);
+
+			if (Globals::bBotsFight)
+				BotAI::Register(Bot.Pawn);
+		}
+
+		Bot.DropState = EBotDropState::Dropped;
+
+		LOG_INFO(LogBots, "Bot dropped into the map.");
 	}
 
 	static void Tick()
 	{
-		if (AllPlayerBotsToTick.size() == 0)
+		if (!Globals::bEnableBots || AllPlayerBotsToTick.size() == 0)
+			return;
+
+		if (!GetWorld())
 			return;
 
 		auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
 		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
 
-		// auto AllBuildingContainers = UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABuildingContainer::StaticClass());
+		if (!GameState || !GameMode)
+			return;
 
-		// for (int i = 0; i < GameMode->GetAlivePlayers().Num(); ++i)
-		for (auto& PlayerBot : AllPlayerBotsToTick)
+		const float Now = UGameplayStatics::GetTimeSeconds(GetWorld());
+		const bool bBusFlying = GameState->GetGamePhase() >= EAthenaGamePhase::Aircraft;
+
+		for (auto& Bot : AllPlayerBotsToTick)
 		{
-			auto CurrentPlayer = PlayerBot.Controller;
-
-			if (CurrentPlayer->IsActorBeingDestroyed())
+			if (!Bot.Controller || Bot.Controller->IsActorBeingDestroyed())
 				continue;
 
-			auto CurrentPawn = CurrentPlayer->GetPawn();
-
-			if (CurrentPawn->IsActorBeingDestroyed())
-				continue;
-
-			auto CurrentPlayerState = Cast<AFortPlayerStateAthena>(CurrentPlayer->GetPlayerState());
-
-			if (!CurrentPlayerState 
-				// || !CurrentPlayerState->IsBot()
-				)
-				continue;
-
-			if (GameState->GetGamePhase() == EAthenaGamePhase::Warmup)
+			switch (Bot.DropState)
 			{
-				/* if (!CurrentPlayer->IsPlayingEmote())
+			case EBotDropState::Lobby:
+			{
+				// As soon as the bus is flying, schedule a randomised drop time
+				// so bots leave the bus at different points like real players.
+				if (bBusFlying)
 				{
-					static auto AthenaDanceItemDefinitionClass = FindObject<UClass>("/Script/FortniteGame.AthenaDanceItemDefinition");
-					auto RandomDanceID = GetRandomObjectOfClass(AthenaDanceItemDefinitionClass);
+					float Spread = Globals::BotMaxDropDelay - Globals::BotMinDropDelay;
 
-					CurrentPlayer->ServerPlayEmoteItemHook(CurrentPlayer, RandomDanceID);
-				} */
-			}	
+					if (Spread < 0.f)
+						Spread = 0.f;
 
-			if (PlayerBot.bIsAthenaController && CurrentPlayerState->IsInAircraft() && !CurrentPlayerState->HasThankedBusDriver())
-			{
-				static auto ServerThankBusDriverFn = FindObject<UFunction>(L"/Script/FortniteGame.FortPlayerControllerAthena.ServerThankBusDriver");
-				CurrentPlayer->ProcessEvent(ServerThankBusDriverFn);
-			}
-
-			if (CurrentPawn)
-			{
-				if (PlayerBot.NextJumpTime <= UGameplayStatics::GetTimeSeconds(GetWorld()))
-				{
-					static auto JumpFn = FindObject<UFunction>(L"/Script/Engine.Character.Jump");
-
-					CurrentPawn->ProcessEvent(JumpFn);
-					PlayerBot.NextJumpTime = UGameplayStatics::GetTimeSeconds(GetWorld()) + (rand() % 4 + 3);
+					float RandomDelay = Spread > 0.f ? (float)(std::rand() % (int)(Spread * 100)) / 100.f : 0.f;
+					Bot.DropTime = Now + Globals::BotMinDropDelay + RandomDelay;
+					Bot.DropState = EBotDropState::WaitingDrop;
 				}
+				break;
 			}
 
-			/* bool bShouldJumpFromBus = CurrentPlayerState->IsInAircraft(); // TODO (Milxnor) add a random percent thing
-
-			if (bShouldJumpFromBus)
+			case EBotDropState::WaitingDrop:
 			{
-				CurrentPlayer->ServerAttemptAircraftJumpHook(CurrentPlayer, FRotator());
-			} */
-		}
+				if (Now >= Bot.DropTime)
+					Drop(GameMode, Bot, Now);
+				break;
+			}
 
-		// AllBuildingContainers.Free();
+			case EBotDropState::Dropped:
+			{
+				// Once the fall is over make the bot a normal, damageable target.
+				if (Bot.InvulnerableUntil != 0.f && Now >= Bot.InvulnerableUntil)
+				{
+					if (auto Pawn = Bot.Controller->GetPawn())
+						Pawn->SetCanBeDamaged(true);
+
+					Bot.InvulnerableUntil = 0.f;
+				}
+				break;
+			}
+			}
+		}
 	}
 }
 

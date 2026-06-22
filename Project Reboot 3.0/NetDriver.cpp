@@ -10,6 +10,7 @@
 #include "Package.h"
 #include "AssertionMacros.h"
 #include "bots.h"
+#include "BotAI.h"
 #include "gui.h"
 
 enum class EChannelCloseReason : uint8
@@ -60,10 +61,10 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 		bShouldDestroyAllPlayerBuilds = false;
 	}
 	
-	/* if (bEnableBotTick)
-	{
-		Bots::Tick();
-	} */
+	// Drive the lobby-drop bots (spawn in lobby -> fall into the map) and the
+	// combat AI for every server bot (henchmen / bosses / dropped bots).
+	Bots::Tick();
+	BotAI::TickAll();
 
 	if (Globals::bStartedListening)
 	{
