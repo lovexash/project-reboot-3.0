@@ -27,6 +27,21 @@ namespace Globals
 	extern inline int AmountOfListens = 0; // TODO: Switch to this for LastNum
 	extern inline int BasePort = 7779; // Starting listen port; change per instance to avoid conflicts
 	extern inline bool bDeveloperMode = false;
+
+	// ----------------------------------------------------------------------
+	// Bots (see bots.h / BotAI.h)
+	//
+	// These fill a match with AI players that spawn in the lobby, then drop
+	// out of the sky into the map alongside the real players and fight.
+	// Everything here is safe to tweak per instance.
+	// ----------------------------------------------------------------------
+	extern inline bool  bEnableBots     = true;     // master switch for match-filling bots
+	extern inline int   BotsToSpawn     = 25;       // how many bots join each match
+	extern inline bool  bBotsFight      = true;     // run the combat AI (chase / aim / fire) after they land
+	extern inline float BotMinDropDelay = 3.f;      // earliest a bot drops, in seconds after the aircraft phase starts
+	extern inline float BotMaxDropDelay = 25.f;     // latest a bot drops, in seconds after the aircraft phase starts
+	extern inline float BotDropHeight   = 7000.f;   // how high above the drop point a bot falls in from
+	extern inline float BotDropInvulnerableTime = 8.f; // grace period after dropping so they don't take fall damage
 }
 
 extern inline int NumToSubtractFromSquadId = 0; // I think 2?

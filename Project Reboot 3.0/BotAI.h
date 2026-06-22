@@ -17,6 +17,8 @@
 // top of that: acquire a target, aim at it, chase it and fire bursts.
 // ---------------------------------------------------------------------------
 
+#include <cmath>
+
 #include "reboot.h"
 #include "Actor.h"
 #include "Controller.h"
@@ -66,34 +68,30 @@ namespace BotAI
 		return params.ReturnValue;
 	}
 
-	static void MoveToActor(AController* PC, AActor* Goal, float AcceptanceRadius)
+	// Move the pawn directly via movement input. This works for both player
+	// pawns (driven by an AFortPlayerControllerAthena) and AI pawns, so the
+	// same combat code drives lobby-drop bots and henchmen alike. No navmesh
+	// or AIController is required.
+	static void AddMovementInput(AActor* Pawn, const FVector& WorldDirection, float Scale = 1.f)
 	{
-		static auto fn = FindObject<UFunction>(L"/Script/AIModule.AIController.MoveToActor");
+		static auto fn = FindObject<UFunction>(L"/Script/Engine.Pawn.AddMovementInput");
 
-		if (!fn || !PC || !Goal)
+		if (!fn || !Pawn)
 			return;
 
-		struct
-		{
-			AActor* Goal;
-			float   AcceptanceRadius;
-			bool    bStopOnOverlap;
-			bool    bUsePathfinding;
-			bool    bCanStrafe;
-			UClass* FilterClass;
-			bool    bAllowPartialPath;
-			uint8   ReturnValue;
-		} params{ Goal, AcceptanceRadius, true, false /* direct move, no navmesh needed */, true, nullptr, true };
-
-		PC->ProcessEvent(fn, &params);
+		struct { FVector WorldDirection; float ScaleValue; bool bForce; } params{ WorldDirection, Scale, true };
+		Pawn->ProcessEvent(fn, &params);
 	}
 
-	static void StopMovement(AController* PC)
+	static FVector Normalize(const FVector& V)
 	{
-		static auto fn = FindObject<UFunction>(L"/Script/AIModule.AIController.StopMovement");
+		float LengthSq = V.X * V.X + V.Y * V.Y + V.Z * V.Z;
 
-		if (fn && PC)
-			PC->ProcessEvent(fn);
+		if (LengthSq <= 0.0001f)
+			return FVector{};
+
+		float InvLength = 1.f / sqrtf(LengthSq);
+		return FVector{ (FVector::VectorDataType)(V.X * InvLength), (FVector::VectorDataType)(V.Y * InvLength), (FVector::VectorDataType)(V.Z * InvLength) };
 	}
 
 	static void SetControlRotation(AController* PC, const FRotator& Rotation)
@@ -319,7 +317,9 @@ namespace BotAI
 		auto LookAt = FindLookAtRotation(BotPos, AimPos);
 		SetControlRotation(bot->PC, LookAt);
 
-		// No line of sight: stop firing and chase the last known position.
+		auto MoveDir = Normalize(TargetPos - BotPos);
+
+		// No line of sight: stop firing and chase toward the target.
 		if (!bHasLOS)
 		{
 			if (bot->bIsFiring)
@@ -328,19 +328,17 @@ namespace BotAI
 				bot->bIsFiring = false;
 			}
 
-			MoveToActor(bot->PC, bot->CurrentTarget, 150.f);
+			AddMovementInput(bot->Pawn, MoveDir, 1.f);
 			return;
 		}
 
 		// In sight: close the distance, otherwise hold and strafe.
 		if (Distance > 750.f)
 		{
-			MoveToActor(bot->PC, bot->CurrentTarget, 250.f);
+			AddMovementInput(bot->Pawn, MoveDir, 1.f);
 		}
 		else
 		{
-			StopMovement(bot->PC);
-
 			// Occasional crouch / jump flavour while engaging up close.
 			if ((bot->tick_counter % 90) == 0)
 			{

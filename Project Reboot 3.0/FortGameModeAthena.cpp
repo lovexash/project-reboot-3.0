@@ -957,9 +957,9 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 		AllRebootVans.Free();
 
-		if (AmountOfBotsToSpawn != 0)
+		if (Globals::bEnableBots && Globals::BotsToSpawn > 0)
 		{
-			Bots::SpawnBotsAtPlayerStarts(AmountOfBotsToSpawn);
+			Bots::SpawnBotsAtPlayerStarts(Globals::BotsToSpawn);
 		}
 
 		if (std::floor(Fortnite_Version) == 5)
