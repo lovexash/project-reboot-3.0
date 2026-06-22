@@ -297,8 +297,8 @@ namespace BotAI
 			return;
 		}
 
-		auto BotPos = bot->Pawn->K2_GetActorLocation();
-		auto TargetPos = bot->CurrentTarget->K2_GetActorLocation();
+		auto BotPos = bot->Pawn->GetActorLocation();
+		auto TargetPos = bot->CurrentTarget->GetActorLocation();
 		float Distance = bot->Pawn->GetDistanceTo(bot->CurrentTarget);
 		bool  bHasLOS = LineOfSightTo(bot->PC, bot->CurrentTarget);
 
