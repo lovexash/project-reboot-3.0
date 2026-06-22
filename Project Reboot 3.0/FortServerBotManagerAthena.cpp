@@ -2,6 +2,7 @@
 #include "bots.h"
 #include "ai.h"
 #include "finder.h"
+#include "BotAI.h"
 
 AFortPlayerPawnAthena* UFortServerBotManagerAthena::SpawnBotHook(UFortServerBotManagerAthena* BotManager, FVector& InSpawnLocation, FRotator& InSpawnRotation,
 	UFortAthenaAIBotCustomizationData* InBotData, FFortAthenaAIBotRunTimeCustomizationData& InRuntimeBotData)
@@ -55,6 +56,10 @@ AFortPlayerPawnAthena* UFortServerBotManagerAthena::SpawnBotHook(UFortServerBotM
 	FString OverrideName = UKismetTextLibrary::Conv_TextToString(BotNameSettings->GetOverrideName());
 	*reinterpret_cast<FString*>(__int64(PlayerState) + PlayerState->GetOffset("PlayerNamePrivate")) = OverrideName;
 	PC->GetPlayerState()->OnRep_PlayerName();
+
+	// Hand the freshly spawned NPC over to the combat AI so it actually
+	// fights players instead of just standing around.
+	BotAI::Register(Pawn);
 
 	return Pawn;
 }

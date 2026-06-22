@@ -10,6 +10,7 @@
 #include "Package.h"
 #include "AssertionMacros.h"
 #include "bots.h"
+#include "BotAI.h"
 #include "gui.h"
 
 enum class EChannelCloseReason : uint8
@@ -64,6 +65,9 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 	{
 		Bots::Tick();
 	} */
+
+	// Drive the combat AI for server bots (henchmen / bosses / NPCs).
+	BotAI::TickAll();
 
 	if (Globals::bStartedListening)
 	{
